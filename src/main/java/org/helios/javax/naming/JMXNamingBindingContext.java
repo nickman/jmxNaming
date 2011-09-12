@@ -34,6 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.management.Attribute;
 import javax.management.AttributeList;
 import javax.management.AttributeNotFoundException;
+import javax.management.Descriptor;
 import javax.management.DynamicMBean;
 import javax.management.InvalidAttributeValueException;
 import javax.management.MBeanAttributeInfo;
@@ -44,6 +45,8 @@ import javax.management.MBeanRegistrationException;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import javax.management.ReflectionException;
+import javax.management.modelmbean.DescriptorSupport;
+import javax.naming.Name;
 import javax.naming.NameAlreadyBoundException;
 import javax.naming.NamingException;
 import javax.naming.directory.InvalidAttributesException;
@@ -93,8 +96,106 @@ public class JMXNamingBindingContext implements DynamicMBean, MBeanRegistration 
 	/** The MBeanServer where this MBean is registered */
 	protected MBeanServer server = null;
 	/** A map of AttributeInfos keyed by attribute name */
-	protected final Map<String, MBeanAttributeInfo> attrInfos = new ConcurrentHashMap<String, MBeanAttributeInfo>();
+	protected final Map<String, MBeanAttributeInfo> attrInfos = new ConcurrentHashMap<String, MBeanAttributeInfo>();	
+	/** The parent context */
+	protected final JMXNamingBindingContext parentContext;
+	/** This context MBean's Descriptor */
+	protected final Descriptor descriptor = new DescriptorSupport();
 	
+	
+	
+	
+	//==========================
+	// public static constants
+	//==========================	
+	/** Constant that holds the name of the environment property that specifies the JMX MBean domain where contexts are registered */
+	public static final String JMX_DOMAIN = "java.naming.jmx.domain";
+	/** The default {@link JMX_DOMAIN} value */
+	public static final String DEFAULT_JMX_DOMAIN = "javax.naming";
+	/** The JMX notification type for a new value bound */
+	public static final String NOTIF_TYPE_NEW_BINDING = "jmx.naming.object.added";
+	/** The JMX notification type for a bound value removed */
+	public static final String NOTIF_TYPE_REMOVED_BINDING = "jmx.naming.object.removed";
+	/** The JMX notification type for a bound value renamed */
+	public static final String NOTIF_TYPE_RENAMED_BINDING = "jmx.naming.object.renamed";
+	
+	
+	static {
+		
+	}
+	
+	/**
+	 * Creates a new JMXNamingBindingContext with the specified parent
+	 * @param parentContext the parent JMXNamingBindingContext context
+	 */
+	public JMXNamingBindingContext(JMXNamingBindingContext parentContext) {
+		this.parentContext = parentContext; 
+		initEnvironment();
+	}
+	
+	/**
+	 * Creates a new JMXNamingBindingContext with no parent (i.e. the root context)
+	 */
+	public JMXNamingBindingContext() {
+		this(null); 
+	}
+	
+	/**
+	 * Initializes the environment for this context
+	 */
+	protected void initEnvironment() {
+		if(parentContext!=null) {
+			environment.putAll(parentContext.environment);
+		} else {
+			
+		}
+	}
+	
+    // =================================================
+    //		Context Ops
+    // =================================================
+	
+    /**
+     * Adds a new environment property to the environment of this
+     * context.  If the property already exists, its value is overwritten.
+     * See class description for more details on environment properties.
+     *
+     * @param propName
+     *		the name of the environment property to add; may not be null
+     * @param propVal
+     *		the value of the property to add; may not be null
+     * @return	the previous value of the property, or null if the property was
+     *		not in the environment before
+     * @throws	NamingException if a naming exception is encountered
+     *
+     * @see #getEnvironment()
+     * @see #removeFromEnvironment(String)
+     */
+    public Object addToEnvironment(String propName, Object propVal) throws NamingException {
+    	if(propName==null) throw new NamingException("Environment key was null");
+    	if(propVal==null) throw new NamingException("Environment value was null");
+    	return environment.put(propName, propVal);    	
+    }
+    
+    /**
+     * Closes this context.
+     * This method releases this context's resources immediately, instead of
+     * waiting for them to be released automatically by the garbage collector.
+     *
+     * <p> This method is idempotent:  invoking it on a context that has
+     * already been closed has no effect.  Invoking any other method
+     * on a closed context is not allowed, and results in undefined behaviour.
+     * 
+     * For JMXNamingBindingContext, this call has no effect when called locally,
+     * but if called on a remoted context, will close the underlying transport.
+     *
+     * @throws	NamingException if a naming exception is encountered
+     */
+    public void close() throws NamingException {
+    	
+    }
+    
+    
 	/**
 	 * Adds a new attribute to this context
 	 * @param name the name to bind; may not be empty
@@ -112,6 +213,12 @@ public class JMXNamingBindingContext implements DynamicMBean, MBeanRegistration 
 			synchronized(bindings) {
 				if(!bindings.containsKey(name)) {
 					bindings.put(name, value);
+					attrInfos.put(name, new MBeanAttributeInfo(
+							name, 
+							value==null ? Void.class.getName() : value.getClass().getName(),
+							"A JNDI Binding",
+							true, true, false
+					));
 				} else {
 					throw new NameAlreadyBoundException("The binding named [" + name + "] is already bound in context [" + objectName + "]");
 				}
@@ -120,6 +227,20 @@ public class JMXNamingBindingContext implements DynamicMBean, MBeanRegistration 
 			throw new NameAlreadyBoundException("The binding named [" + name + "] is already bound in context [" + objectName + "]");
 		}
 	}
+	
+	/**
+	 * Adds a new attribute to this context
+	 * @param name the name to bind; may not be empty
+	 * @param value the object to bind; possibly null 
+     * @throws	NameAlreadyBoundException if name is already bound
+     * @throws	InvalidAttributesException if object did not supply all mandatory attributes
+     * @throws	NamingException if a naming exception is encountered
+	 */
+	public void bind(Name name, Object value) throws NameAlreadyBoundException, InvalidAttributesException, NamingException {
+		if(name==null) throw new NamingException("Binding name was null");		
+		bind(name.get(name.size()-1), value);
+	}
+	
 	
 	/**
 	 * <p>Title: NullValueBinding</p>
@@ -146,6 +267,9 @@ public class JMXNamingBindingContext implements DynamicMBean, MBeanRegistration 
 		
 	}
 	
+    // =================================================
+    //		DynamicMBean Ops
+    // =================================================
 	
     /**
      * Obtain the value of a specific attribute of the Dynamic MBean.
@@ -236,7 +360,7 @@ public class JMXNamingBindingContext implements DynamicMBean, MBeanRegistration 
      *
      */
     public MBeanInfo getMBeanInfo() {
-    	return null;
+    	return StandardMBeanFeatures.buildMBeanInfo(attrInfos.values(), objectName, descriptor);
     }
 
     // =================================================
